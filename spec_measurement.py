@@ -1,0 +1,426 @@
+import ipaddress
+import time
+from tkinter import *
+from tkinter import ttk
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import numpy as np
+from zolix.app.zolix_gateway import ZolixGateway
+from openpyxl import Workbook
+from openpyxl.chart import ScatterChart, Reference, Series
+from tkinter import filedialog, messagebox
+from datetime import datetime
+
+# import win32gui
+# import win32com.client
+
+
+class SpectralMeasurements:
+    """Class for creating window to measure spectre of the sample using oscilloscope and monochromator"""
+
+    def __init__(self):
+        self.zolix_gateway = None
+        self.zolix_connected = False
+        self.ophir_connected = False
+        # self.ophir_device = self._connect_to_Ophir()
+        self.zolix_IP_value = "127.0.0.1"
+
+        # Первоначальные данные графика
+        self.x_values = []
+        self.y_values = []
+
+        self.root = Tk()  # create new tkinter obj
+        self._create_interface()
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.root.mainloop()
+
+    def _change_monochromator_wavelength(self, new_wavelength):
+        """Method send requests to the Zolix and change the wavelength"""
+        if self.zolix_gateway:
+            self.zolix_gateway.move_to_wave(new_wavelength)  # set new wavelength
+            cur_wave = self.zolix_gateway.get_current_wave()  # get current wavelength
+            if cur_wave == new_wavelength:  # check whether the wavelength is set
+                return True
+        return False
+
+    def on_close(self):
+        if messagebox.askokcancel("Выход", "Действительно хотите закрыть окно?"):
+            self.ophir_com.StopAllStreams()
+            self.ophir_com.CloseAll()
+            self.root.destroy()
+
+    def _check_all_equipment_connected(self):
+        """Method checks whether all equipment needed for measurement is connected"""
+        if self.ophir_connected and self.zolix_connected:
+            self.wavelength_from_input.config(state="normal")
+            self.wavelength_to_input.config(state="normal")
+            self.wavelength_measurement_step_input.config(state="normal")
+            self.start_measurement_button.config(state="normal")
+
+    # def _get_vertical_Rigol_scale(self):
+    #     if self.oscilloscope_chanel == "ch1":
+    #         self.vertical_scale = self.rigol_gateway.ch1.get_vertical_scale()
+    #     elif self.oscilloscope_chanel == "ch2":
+    #         self.vertical_scale = self.rigol_gateway.ch2.get_vertical_scale()
+
+    # def _connect_to_Rigol_oscilloscope(self):
+    #     if self.rigol_gateway:
+    #         self.rigol_gateway.manual_connect_device(self.rigol_device)
+    #         self.rigol_gateway.auto()
+    #         self.rigol_gateway.run()
+    #         self.rigol_connected = True
+    #         self._check_all_equipment_connected()
+    #         self.rigol_connect_state.config(text="Подключено", background="#50FA1C")
+    #         self._get_vertical_Rigol_scale()
+
+    def _create_OphirCom(self):
+        ophir_com = win32com.client.Dispatch("OphirLMMeasurement.CoLMMeasurement")
+        # Stop & Close all devices
+        ophir_com.StopAllStreams()
+        ophir_com.CloseAll()
+        self.ophir_com = ophir_com
+
+    def _connect_to_Ophir(self):
+        """This method automatically search and connect to Ophir device"""
+        self._create_OphirCom()
+        # Scan for connected Devices
+        DeviceList = self.ophir_com.ScanUSB()
+        for Device in DeviceList:  # if any device is connected
+            ophir_device = self.ophir_com.OpenUSBDevice(Device)  # open first device
+            exists = self.ophir_com.IsSensorExists(ophir_device, 0)
+            if exists:
+                self.ophir_connected = True
+                self._check_all_equipment_connected()
+                self.ophir_connect_state.config(text="Подключено", background="#50FA1C")
+                return ophir_device
+            return None
+
+    # def _update_Rigol_vertical_scale(self, new_scale):
+    #     if self.oscilloscope_chanel == "ch1":
+    #         self.rigol_gateway.ch1.set_vertical_scale(new_scale)
+    #         self._get_vertical_Rigol_scale()
+    #     elif self.oscilloscope_chanel == "ch2":
+    #         self.rigol_gateway.ch2.set_vertical_scale(new_scale)
+    #         self._get_vertical_Rigol_scale()
+
+    # def _check_Rigol_vertical_scale(self, value):
+    #     self._get_vertical_Rigol_scale()
+    #     new_value = value
+    #     while True:
+    #         if (4 * self.vertical_scale - 4 * self.vertical_scale * 0.1) <= value:
+    #             self._update_Rigol_vertical_scale(
+    #                 self.vertical_scale + self.vertical_scale * 0.1
+    #             )
+    #         elif 2 * self.vertical_scale >= value:
+    #             self._update_Rigol_vertical_scale(
+    #                 self.vertical_scale - self.vertical_scale * 0.1
+    #             )
+    #         else:
+    #             return new_value
+    #         new_value = self._get_Rigol_oscillograph_max_V()
+
+    def _connect_to_Zolix_monochromator(self):
+        """Method to connect to the zolix monochromator. Don't forger to connect usb and turn on the zolix server"""
+        if self._validate_IP_zolix():
+            zolix_gateway = ZolixGateway(
+                f"{self.zolix_IP.get()}", 43665
+            )  # configure ip address and port of the client
+            zolix_gateway.connect_to_server()  # connect to the server
+            zolix_gateway.set_usb_mode(
+                True
+            )  # set the mode of communication in USB mode
+            qte = (
+                zolix_gateway.search_zolix_usb_device()
+            )  # search all zolix connected with the server
+            serial = zolix_gateway.get_zolix_usb_serial(0)
+            zolix_gateway.set_usb_serials(serial)
+
+            zolix_gateway.get_is_open()  # verify if there is an already connected monochromator
+            zolix_gateway.open()  # open the communication with the zolix monochromator and the server
+            zolix_gateway.get_is_open()  # verify that the connection between the server and the monochromator is on
+            self.zolix_gateway = zolix_gateway
+            self.zolix_connected = True
+            self._check_all_equipment_connected()
+            self.zolix_connect_state.config(
+                text="Подключено", foreground="#000000", background="#50FA1C"
+            )
+            return True
+        else:
+            self.zolix_connect_state.config(
+                text="Неверный формат IP адреса.",
+                foreground="#B71C1C",
+                background="#F71E1E",
+            )
+
+    def _create_interface(self):
+        root = self.root
+
+        root.title("Спектрометр")  # give window name
+        validate_float_only = (root.register(self._validate_wl_input_float_only), "%P")
+
+        self.opts = {"padx": 10, "pady": 10, "ipadx": 10, "ipady": 10, "sticky": "nswe"}
+        opts = self.opts
+
+        # IP for Zolix
+        self.zolix_IP = Entry()
+        self.zolix_IP.insert(0, self.zolix_IP_value)
+        self.zolix_IP.grid(row=0, column=0, **opts)
+
+        # Zolix connect
+        self.zolix_connect = Button(
+            text="Подключить Zolix", command=self._connect_to_Zolix_monochromator
+        )
+        self.zolix_connect.grid(row=0, column=1, **opts)
+
+        # Zolix connect state
+        self.zolix_connect_state = Label(text="Отключено", background="#F71E1E")
+        self.zolix_connect_state.grid(row=0, column=2, **opts)
+
+        # Ophir connect
+        self.ophir_connect = Label(text="Подключить Ophir")
+        self.ophir_connect.grid(row=1, column=1, **opts)
+
+        # Ophir connect state
+        self.ophir_connect_state = Label(text="Отключено", background="#F71E1E")
+        self.ophir_connect_state.grid(row=1, column=2, **opts)
+
+        # label for initial wavelength
+        self.wavelength_from_label = Label(text="Начальная длина волны")
+        self.wavelength_from_label.grid(row=4, column=0, **opts)
+
+        # input for initial wavelength
+        self.wavelength_from_input = Entry(
+            state=DISABLED, validate="key", validatecommand=validate_float_only
+        )
+        self.wavelength_from_input.grid(row=5, column=0, **opts)
+
+        # label for final wavelength
+        self.wavelength_to_label = Label(text="Конечная длина волны")
+        self.wavelength_to_label.grid(row=4, column=1, **opts)
+
+        # input for final wavelength
+        self.wavelength_to_input = Entry(
+            state=DISABLED,
+            validate="key",
+            validatecommand=validate_float_only,
+        )
+        self.wavelength_to_input.grid(row=5, column=1, **opts)
+
+        # label for step of wavelengths
+        self.wavelength_measurement_step_label = Label(text="Шаг измерения")
+        self.wavelength_measurement_step_label.grid(row=4, column=2, **opts)
+
+        # input for step of wavelengths
+        self.wavelength_measurement_step_input = Entry(
+            state=DISABLED, validate="key", validatecommand=validate_float_only
+        )
+        self.wavelength_measurement_step_input.grid(row=5, column=2, **opts)
+
+        # start measurement button
+        self.start_measurement_button = Button(
+            state=DISABLED,
+            text="Начать измерение",
+            command=self._start_measurement,
+        )
+        self.start_measurement_button.grid(row=6, column=0, columnspan=3, **opts)
+
+    def _save_plot_excel(self):
+        wb = Workbook()
+        sheet = wb.active
+        sheet.title = "Результаты измерения"
+        sheet.cell(1, 1).value = "Длина волны"
+        sheet.cell(1, 2).value = "Амплитуда"
+
+        # Add data to the first column of the file
+        for row in range(2, len(self.x_values) + 2):
+            sheet.cell(row, 1).value = self.x_values[row - 2]
+
+        # Add data to the second column of the file
+        for row in range(2, len(self.y_values) + 2):
+            sheet.cell(row, 2).value = self.y_values[row - 2]
+
+        chart = ScatterChart()
+
+        x_values = Reference(
+            sheet, min_col=1, min_row=1, max_row=len(self.x_values) + 1
+        )
+
+        y_values = Reference(
+            sheet, min_col=2, min_row=1, max_row=len(self.x_values) + 1
+        )
+
+        series1 = Series(y_values, x_values, title_from_data=True)
+
+        chart.title = "Спектр излучения"
+        chart.y_axis.tital = "Амплитуда, у.е"
+        chart.x_axis.tital = "Длина волны, нм"
+
+        values = Reference(
+            worksheet=sheet,
+            min_row=1,
+            max_row=len(self.x_values) + 1,
+            min_col=1,
+            max_col=2,
+        )
+
+        chart.append(series1)
+
+        sheet.add_chart(chart, "D2")
+
+        # Open a save file dialog
+        file_path = filedialog.asksaveasfilename(
+            title="Выберите путь сохранения файла",
+            initialfile=f"Spectrum_range{self.initial_wl}_{self.final_wl}_step{self.step}_{datetime.now().strftime('%d.%m.%Y')}.xlsx",
+            filetypes=[("Файлы Excel", "*.xlsx")],
+            defaultextension=".xlsx",
+        )
+
+        # Сохраняем файл Excel
+        wb.save(file_path)
+
+    def _save_plot_image(self):
+        file_path = filedialog.asksaveasfilename(
+            title="Выберите путь сохранения изображения",
+            initialfile=f"Spectrum_range:{self.initial_wl}-{self.final_wl}_step:{self.step}_{datetime.now().strftime('%d.%m.%Y')}.png",
+            filetypes=[("PNG files", "*.png"), ("all files", "*.*")],
+            defaultextension=".png",
+        )
+        self.fig.savefig(file_path, dpi=1000)
+
+    # def _get_Rigol_oscillograph_average_V(self):
+    #     if self.rigol_gateway:
+    #         if self.oscilloscope_chanel == "ch1":
+    #             return self.rigol_gateway.ch1.meas_Vavg()
+    #         elif self.oscilloscope_chanel == "ch2":
+    #             return self.rigol_gateway.ch2.meas_Vavg()
+
+    # def _get_Rigol_oscillograph_max_V(self):
+    #     if self.rigol_gateway:
+    #         if self.oscilloscope_chanel == "ch1":
+    #             result = self.rigol_gateway.ch1.meas_Vmax()
+    #             return result
+    #         elif self.oscilloscope_chanel == "ch2":
+    #             return self.rigol_gateway.ch2.meas_Vmax()
+
+    # def _get_Rigol_oscillograph_min_V(self):
+    #     if self.rigol_gateway:
+    #         if self.oscilloscope_chanel == "ch1":
+    #             return self.rigol_gateway.ch1.meas_Vmin()
+    #         elif self.oscilloscope_chanel == "ch2":
+    #             return self.rigol_gateway.ch2.meas_Vmin()
+
+    def _get_y_average_value(self):
+        ## Получаем данные
+        data = self.ophir_com.GetData(self.ophir_device, 0)
+        values = data[0]
+        return round((sum(values) / len(values)), 4)
+
+    def _plot(self):
+        # Очищаем прошлые данные
+        self.x_values = []
+        self.y_values = []
+
+        # Включаем интерактивный режим
+        plt.ion()
+
+        # Создаем объект графика
+        fig = plt.Figure()
+        ax = fig.add_subplot(111)
+
+        """Вероятно нужно вызвать ConfigureStreamMode(DeviceHandle, 0, 2, 1) и установить мод Immediate"""
+        # Запускаем измерение
+        self.ophir_com.StartStream(self.ophir_device, 0)
+
+        # Устанавливаем границы графика
+        ax.set_xlim(self.initial_wl, self.final_wl)
+        max_y_value = self._get_Rigol_oscillograph_max_V()
+        ax.set_ylim(
+            self._get_Rigol_oscillograph_min_V(), self._get_Rigol_oscillograph_max_V()
+        )
+
+        ax.set_xlabel("Длина волны, нм")
+        ax.set_ylabel("Амплитуда, у.е.")
+
+        ax.grid(True)
+
+        # формируем список точек для измерения
+        x_range = np.arange(self.initial_wl, self.final_wl + self.step, self.step)
+
+        # Формируем первичную линию графика
+        (line1,) = ax.plot(self.x_values, self.y_values, "b-")
+
+        # Добавляем наш график в окно
+        canvas = FigureCanvasTkAgg(fig, master=self.root)
+
+        # Располагаем график в Tkinter окне
+        canvas.get_tk_widget().grid(row=7, column=0, columnspan=3, **self.opts)
+
+        # Пробегаемся по точкам измерения и получаем данные с приборов, и обновляем график
+        for x in x_range:
+            if self._change_monochromator_wavelength(x):
+                self.x_values.append(float(x))
+
+                new_y_value = self._get_y_average_value()
+                # new_y_value = self._check_Rigol_vertical_scale(y_value)
+                self.y_values.append(new_y_value)
+
+                if new_y_value > max_y_value:
+                    ax.set_ylim(
+                        self._get_Rigol_oscillograph_min_V(),
+                        new_y_value + new_y_value * 0.1,
+                    )
+                    max_y_value = new_y_value
+
+                line1.set_xdata(self.x_values)
+                line1.set_ydata(self.y_values)
+
+                # Обновляем график
+                fig.canvas.draw()
+                fig.canvas.flush_events()
+
+        # start measurement button
+        self.save_plot_excel_button = Button(
+            self.root,
+            text="Сохранить Excel",
+            command=self._save_plot_excel,
+        )
+        self.save_plot_excel_button.grid(row=8, column=0, **self.opts)
+
+        self.save_plot_image_button = Button(
+            self.root,
+            text="Сохранить png",
+            command=self._save_plot_image,
+        )
+        self.save_plot_image_button.grid(row=8, column=1, **self.opts)
+
+        # Обновляем график
+        fig.canvas.draw()
+        fig.canvas.flush_events()
+        self.fig = fig
+
+    def _set_oscilloscope_chanel(self, event):
+        val = self.channels_selection_box.get()
+        self.oscilloscope_chanel = val
+
+    def _validate_IP_zolix(self):
+        try:
+            ipaddress.IPv4Network(self.zolix_IP.get())
+            return True
+        except ValueError:
+            return False
+
+    def _validate_wl_input_float_only(self, string):
+        if (
+            string.isdigit()
+            or (string and string.replace(".", "", 1).isdigit())
+            or not string
+        ):
+            return True
+        else:
+            return False
+
+    def _start_measurement(self):
+        self.initial_wl = float(self.wavelength_from_input.get())
+        self.final_wl = float(self.wavelength_to_input.get())
+        self.step = float(self.wavelength_measurement_step_input.get())
+        self.animationObj = self._plot()
